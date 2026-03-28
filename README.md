@@ -2,7 +2,7 @@
 
 Automated setup script for remote coding from a remote device using Tailscale and [t3code](https://github.com/pingdotgg/t3code).
 
-This setup lets you leave the computing power at home and connect from a lightweight remote device. Your computer stays on, runs your coding agents, and is reachable only from devices on your private Tailscale network.
+This setup lets you leave the computing power at home and connect from a lightweight remote device. Your computer stays on, runs your coding agents, and is intended to be accessed from devices on your private Tailscale network.
 
 ## Quick Start
 
@@ -10,7 +10,7 @@ On the computer you want to access remotely:
 
 Prerequisites:
 - [Homebrew](https://brew.sh)
-- [Node.js](https://nodejs.org) or `nvm` with an LTS release installed
+- [Node.js](https://nodejs.org) 22.16+, 23.11+, or 24.10+ installed
 - At least one supported coding-agent CLI installed: [Claude Code](https://code.claude.com/docs/en/overview#get-started) or [Codex CLI](https://developers.openai.com/codex/cli)
 
 ```bash
@@ -25,7 +25,7 @@ On your remote device, install Tailscale, then open a browser and go to `http://
 - Installs [t3code](https://github.com/pingdotgg/t3code), a web GUI for AI coding agents (Claude and Codex), as a launchd service on port 3773
 - Installs the [tailserve](https://github.com/nathangathright/tailserve) skill into your detected coding agent CLIs so they know how to preview web projects over Tailscale
 
-Tailscale encrypts traffic end-to-end. Access stays limited to devices on your private Tailscale network.
+Tailscale encrypts traffic end-to-end. In the default workflow, you access t3code from devices on your private Tailscale network.
 
 ## Daily Workflow
 
@@ -50,6 +50,7 @@ tailserve covers three approaches:
 launchctl bootout gui/$(id -u)/com.t3code.server
 rm ~/Library/LaunchAgents/com.t3code.server.plist
 npm uninstall -g t3
+sudo tailscaled uninstall-system-daemon || true
 brew uninstall tailscale
 npx skills remove --global --agent '*' tailserve -y
 ```

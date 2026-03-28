@@ -4,6 +4,8 @@
 
 set -e  # Exit on error
 
+T3_REQUIRED_NODE_RANGE="^22.16 || ^23.11 || >=24.10"
+
 echo "🚀 Setting up computer for remote coding from another device..."
 echo ""
 
@@ -44,6 +46,20 @@ ensure_tailscale_daemon_ready() {
     echo "  sudo tailscaled install-system-daemon"
     echo "  tailscale status"
     return 1
+}
+
+node_version_supported_for_t3() {
+    node <<'NODE'
+const version = process.versions.node.split(".").map(Number);
+const [major, minor] = version;
+
+const supported =
+    (major === 22 && minor >= 16) ||
+    (major === 23 && minor >= 11) ||
+    major >= 24;
+
+process.exit(supported ? 0 : 1);
+NODE
 }
 
 # Check if running on macOS
@@ -99,6 +115,14 @@ if ! command -v node &> /dev/null; then
 else
     echo "✓ Node.js $(node --version) installed"
 fi
+
+if ! node_version_supported_for_t3; then
+    echo "❌ Error: Installed Node.js $(node --version) is not supported by t3code."
+    echo "t3code currently requires Node.js ${T3_REQUIRED_NODE_RANGE}."
+    echo "Upgrade Node.js, then re-run this script."
+    exit 1
+fi
+echo "✓ Node.js version is compatible with t3code"
 
 # Check if at least one supported coding-agent CLI is installed
 AGENT_TARGETS=()
