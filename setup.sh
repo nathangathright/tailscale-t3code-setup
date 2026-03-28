@@ -1,10 +1,10 @@
 #!/bin/bash
-# iPad Remote Coding Setup Script
-# Sets up a Mac for remote access via Tailscale SSH and tmux
+# Remote Coding Setup Script
+# Sets up a computer for remote access via Tailscale and t3code
 
 set -e  # Exit on error
 
-echo "🚀 Setting up Mac for remote coding from iPad..."
+echo "🚀 Setting up computer for remote coding from another device..."
 echo ""
 
 # Ensure the Tailscale daemon is reachable before running tailscale up.
@@ -54,11 +54,11 @@ fi
 
 # Check if Homebrew is installed
 if ! command -v brew &> /dev/null; then
-    echo "📦 Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-else
-    echo "✓ Homebrew already installed"
+    echo "❌ Error: Homebrew is required but not installed."
+    echo "Install it first: https://brew.sh"
+    exit 1
 fi
+echo "✓ Homebrew installed"
 
 # Install Tailscale
 echo ""
@@ -70,202 +70,130 @@ else
     echo "✓ Tailscale already installed"
 fi
 
-# Start Tailscale with SSH enabled
+# Start Tailscale
 echo ""
-echo "🔐 Checking Tailscale SSH..."
+echo "🔐 Starting Tailscale..."
 ensure_tailscale_daemon_ready
 if ! tailscale status &> /dev/null; then
     echo "Please authenticate Tailscale in the browser window that opens..."
-    sudo tailscale up --ssh
-    echo "✓ Tailscale SSH enabled"
+    sudo tailscale up
+    echo "✓ Tailscale connected"
 else
-    # Check if SSH is already enabled
-    SSH_ENABLED=$(tailscale debug prefs 2>/dev/null | grep -c '"RunSSH": true' || echo 0)
-    if [ "$SSH_ENABLED" -eq 0 ]; then
-        echo "Enabling SSH (requires sudo)..."
-        sudo tailscale up --ssh
-        echo "✓ Tailscale SSH enabled"
-    else
-        echo "✓ Tailscale SSH already enabled"
-    fi
+    echo "✓ Tailscale already connected"
 fi
 
 # Get Tailscale hostname
-# Extract the hostname for the current machine (first line with this machine's IP)
 TAILSCALE_HOST=$(tailscale status --self=true | awk 'NR==1 {print $2}')
 if [ -z "$TAILSCALE_HOST" ]; then
-    # Fallback: strip .local from system hostname
     TAILSCALE_HOST=$(hostname | sed 's/\.local$//' | tr '[:upper:]' '[:lower:]')
 fi
 
-# Install tmux
+# Check if Node.js is installed
 echo ""
-echo "🖥️  Installing and configuring tmux..."
-if ! command -v tmux &> /dev/null; then
-    brew install tmux
-    echo "✓ tmux installed"
+if ! command -v node &> /dev/null; then
+    echo "❌ Error: Node.js is required but not installed."
+    echo "Install it from https://nodejs.org or via nvm:"
+    echo "  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh | bash"
+    echo "  nvm install --lts"
+    exit 1
 else
-    echo "✓ tmux already installed"
+    echo "✓ Node.js $(node --version) installed"
 fi
 
-# Install qrencode for QR code generation
+# Check if at least one supported coding-agent CLI is installed
+AGENT_TARGETS=()
+
+if command -v claude &> /dev/null; then
+    AGENT_TARGETS+=("claude-code")
+fi
+
+if command -v codex &> /dev/null; then
+    AGENT_TARGETS+=("codex")
+fi
+
+if [ ${#AGENT_TARGETS[@]} -eq 0 ]; then
+    echo "❌ Error: Install at least one supported coding-agent CLI first."
+    echo "  Claude Code: https://code.claude.com/docs/en/overview#get-started"
+    echo "  Codex CLI:   https://developers.openai.com/codex/cli"
+    exit 1
+fi
+echo "✓ Supported coding-agent CLI detected for: ${AGENT_TARGETS[*]}"
+
+# Install t3code (web GUI for coding agents)
 echo ""
-echo "📱 Installing qrencode for QR code display..."
-if ! command -v qrencode &> /dev/null; then
-    brew install qrencode
-    echo "✓ qrencode installed"
+echo "☕ Installing t3code..."
+if ! command -v t3 &> /dev/null; then
+    npm install -g t3
+    echo "✓ t3code installed"
 else
-    echo "✓ qrencode already installed"
+    echo "✓ t3code already installed"
 fi
 
-# Create tmux config
+# Set up launchd service for t3code
+PLIST_LABEL="com.t3code.server"
+PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 echo ""
-echo "📝 Creating tmux configuration..."
-TMUX_MAIN_CONFIG="$HOME/.tmux.conf"
-TMUX_REMOTE_CONFIG="$HOME/.tmux.remote-coding.conf"
-cat > "$TMUX_REMOTE_CONFIG" << 'EOF'
-# Enable mouse support
-set -g mouse on
+echo "🔄 Setting up t3code to start automatically..."
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which node)</string>
+        <string>$(which t3)</string>
+        <string>--no-browser</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${HOME}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${HOME}/.t3/userdata/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/.t3/userdata/logs/launchd-stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$(dirname $(which node)):$(dirname $(which t3)):/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+PLIST
 
-# Increase scrollback buffer
-set -g history-limit 10000
+# Ensure log directory exists
+mkdir -p "$HOME/.t3/userdata/logs"
 
-# Better terminal type for modern terminals
-set -g default-terminal "tmux-256color"
+# Load the service (unload first if already loaded)
+launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+echo "✓ t3code service installed and started (port 3773)"
 
-# Terminal overrides for better color and mouse support
-set -ga terminal-overrides ",xterm-256color:Tc"
-set -ga terminal-overrides ",*256col*:Tc"
-
-# Fast escape time (better responsiveness)
-set -sg escape-time 10
-
-# Focus events for better terminal integration
-set -g focus-events on
-
-# Status bar styling
-set -g status-style bg=black,fg=white
-set -g status-right '#[fg=cyan]%Y-%m-%d %H:%M'
-EOF
-echo "✓ Managed tmux profile written to $TMUX_REMOTE_CONFIG"
-
-TMUX_INCLUDE_LINE="source-file ~/.tmux.remote-coding.conf"
-if [ ! -f "$TMUX_MAIN_CONFIG" ]; then
-    cat > "$TMUX_MAIN_CONFIG" << 'EOF'
-source-file ~/.tmux.remote-coding.conf
-EOF
-    echo "✓ Created $TMUX_MAIN_CONFIG and linked managed profile"
-elif ! grep -Fq ".tmux.remote-coding.conf" "$TMUX_MAIN_CONFIG"; then
-    echo "" >> "$TMUX_MAIN_CONFIG"
-    echo "# iPad remote coding setup (managed include)" >> "$TMUX_MAIN_CONFIG"
-    echo "$TMUX_INCLUDE_LINE" >> "$TMUX_MAIN_CONFIG"
-    echo "✓ Added managed profile include to $TMUX_MAIN_CONFIG"
-else
-    echo "✓ Existing $TMUX_MAIN_CONFIG already includes managed profile"
-fi
-
-# Install sesh (tmux session manager for AI coding agents)
+# Install tailserve skill for detected coding agents
 echo ""
-echo "☕ Installing sesh..."
-curl -fsSL https://raw.githubusercontent.com/nathangathright/sesh/main/install.sh | bash
-
-# Add unlock function
-SHELL_CONFIG=""
-if [ -f ~/.zshrc ]; then
-    SHELL_CONFIG=~/.zshrc
-elif [ -f ~/.bashrc ]; then
-    SHELL_CONFIG=~/.bashrc
-elif [ -f ~/.bash_profile ]; then
-    SHELL_CONFIG=~/.bash_profile
-fi
-
-if [ -z "$SHELL_CONFIG" ]; then
-    SHELL_CONFIG=~/.zshrc
-    touch "$SHELL_CONFIG"
-    echo "✓ Created $SHELL_CONFIG for shell helpers"
-fi
-
-if [ -n "$SHELL_CONFIG" ]; then
-    if ! grep -q "unlock()" "$SHELL_CONFIG" 2>/dev/null; then
-        echo "" >> "$SHELL_CONFIG"
-        echo "# Unlock macOS keychain (locked by default over SSH)" >> "$SHELL_CONFIG"
-        cat >> "$SHELL_CONFIG" << 'FUNC'
-unlock() {
-  if security show-keychain-info ~/Library/Keychains/login.keychain-db 2>/dev/null; then
-    echo "🔓 Keychain is already unlocked"
-  else
-    security unlock-keychain ~/Library/Keychains/login.keychain-db
-  fi
-}
-FUNC
-        echo "✓ 'unlock' function added to $SHELL_CONFIG"
-    else
-        echo "✓ 'unlock' function already exists"
-    fi
-fi
-
-# Install tailserve skill for AI coding agents
-echo ""
-echo "📚 Installing tailserve skill for AI coding agents..."
-TAILSERVE_DIR="$HOME/Developer/tailserve"
-
-if [ ! -d "$TAILSERVE_DIR" ]; then
-    git clone https://github.com/nathangathright/tailserve.git "$TAILSERVE_DIR"
-else
-    echo "  tailserve repo already present at $TAILSERVE_DIR"
-fi
-
-bash "$TAILSERVE_DIR/install.sh"
-echo "✓ tailserve skill installed"
-
-# Build SSH URL for QR code
-SSH_URL="ssh://$(whoami)@${TAILSCALE_HOST}"
+echo "📚 Installing tailserve skill for detected coding agents..."
+npx skills add nathangathright/tailserve -g -a "${AGENT_TARGETS[@]}" -y
+echo "✓ tailserve skill installed for: ${AGENT_TARGETS[*]}"
 
 # Display connection information
 echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📱 iPad Connection Details:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "t3code is running at:"
 echo ""
-echo "Hostname: $TAILSCALE_HOST"
-echo "Username: $(whoami)"
-echo "Authentication: Tailscale SSH (automatic)"
-echo ""
-
-# Display QR code if qrencode is available
-if command -v qrencode &> /dev/null; then
-    echo "Scan this QR code from your iPad to open in Termius:"
-    echo ""
-    qrencode -t UTF8 "$SSH_URL"
-    echo ""
-    echo "URL: $SSH_URL"
-else
-    echo "URL: $SSH_URL"
-fi
-
-echo ""
+echo "  Local:  http://localhost:3773"
+echo "  Remote: http://${TAILSCALE_HOST}:3773"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Next steps:"
-echo "1. On your iPad, install Tailscale and Termius from the App Store"
-echo "2. Sign into Tailscale with the same account"
-echo "3. Scan the QR code above, or manually create a new host in Termius:"
-echo "   - Hostname: $TAILSCALE_HOST"
-echo "   - Username: $(whoami)"
-echo "   - Authentication: Default settings"
-echo "4. Connect and run: sesh new"
-echo "5. Run 'unlock' if you need git or keychain access"
-echo ""
-echo "Shell functions:"
-echo "  sesh new                  # Interactive session wizard"
-echo "  sesh myproject ~/code     # Create/attach 'myproject' session at ~/code"
-echo "  sesh -s work -p ~/app     # Using named parameters"
-echo "  sesh list                 # Pick from existing sessions"
-echo "  unlock                   # Unlock macOS keychain over SSH"
-echo ""
-echo "To start using these commands:"
-echo "  source $SHELL_CONFIG  # Load the new functions and aliases"
+echo "1. On your remote device, install Tailscale and sign in with the same account"
+echo "2. Open a browser and go to: http://${TAILSCALE_HOST}:3773"
 echo ""
 echo "Happy remote coding! ☕"
