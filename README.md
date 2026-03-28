@@ -1,132 +1,57 @@
-# Remote Coding from Coffee Shops: iPad Mini + Agentic Coding Setup
+# Remote Coding Setup with Tailscale and t3code
 
-Automated setup script for remote coding from an iPad using Tailscale SSH and tmux.
+Automated setup script for remote coding from a remote device using Tailscale and [t3code](https://github.com/pingdotgg/t3code).
 
-📖 **[Read the full guide with hardware recommendations](https://nathangathright.github.io/ipad-remote-setup/)**
+This setup lets you leave the computing power at home and connect from a lightweight remote device. Your computer stays on, runs your coding agents, and is reachable only from devices on your private Tailscale network.
 
 ## Quick Start
 
-On your Mac (the one you want to access remotely):
+On the computer you want to access remotely:
+
+Prerequisites:
+- [Homebrew](https://brew.sh)
+- [Node.js](https://nodejs.org) or `nvm` with an LTS release installed
+- At least one supported coding-agent CLI installed: [Claude Code](https://code.claude.com/docs/en/overview#get-started) or [Codex CLI](https://developers.openai.com/codex/cli)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nathangathright/ipad-remote-setup/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nathangathright/tailscale-t3code-setup/main/setup.sh | bash
 ```
 
-On your iPad, install [Tailscale](https://apps.apple.com/us/app/tailscale/id1470499037) and [Termius](https://apps.apple.com/us/app/termius-ssh-client/id549039908), then scan the QR code displayed by the script.
-
-Connect and run `sesh new` (or `sesh <name> [path]`) to start coding.
+On your remote device, install Tailscale, then open a browser and go to `http://<tailscale-hostname>:3773` to start coding. The setup script prints your Tailscale hostname at the end.
 
 ## What the Script Does
 
-- Installs Tailscale (CLI version) with SSH support
-- Installs tmux for persistent sessions with smooth scrolling
-- Installs `sesh`, a tmux session manager for AI coding agent sessions
-- Creates an `unlock` function to unlock the macOS keychain over SSH
-- Installs the [tailserve](https://github.com/nathangathright/tailserve) skill that teaches AI coding agents how to preview web projects over Tailscale
-- Displays a QR code to configure Termius on your iPad
+- Installs Tailscale (CLI version) for encrypted networking between devices
+- Installs [t3code](https://github.com/pingdotgg/t3code), a web GUI for AI coding agents (Claude and Codex), as a launchd service on port 3773
+- Installs the [tailserve](https://github.com/nathangathright/tailserve) skill into your detected coding agent CLIs so they know how to preview web projects over Tailscale
 
-## Manual Setup
+Tailscale encrypts traffic end-to-end. Access stays limited to devices on your private Tailscale network.
 
-If you prefer to set things up manually:
+## Daily Workflow
 
-### 1. Tailscale
-
-```bash
-brew install tailscale
-sudo tailscale up --ssh
-```
-
-> **Note:** Use the Homebrew CLI version. The App Store/GUI versions don't support Tailscale SSH server.
-
-### 2. Tmux
-
-```bash
-brew install tmux
-
-cat > ~/.tmux.conf << 'EOF'
-# Enable mouse support
-set -g mouse on
-
-# Increase scrollback buffer
-set -g history-limit 10000
-
-# Better terminal type for modern terminals
-set -g default-terminal "tmux-256color"
-
-# Terminal overrides for better color and mouse support
-set -ga terminal-overrides ",xterm-256color:Tc"
-set -ga terminal-overrides ",*256col*:Tc"
-
-# Fast escape time (better responsiveness)
-set -sg escape-time 10
-
-# Focus events for better terminal integration
-set -g focus-events on
-EOF
-
-source ~/.zshrc
-```
-
-### 3. sesh (Session Manager)
-
-Install [sesh](https://github.com/nathangathright/sesh), a tmux session manager for AI coding agents:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/nathangathright/sesh/main/install.sh | bash
-source ~/.zshrc
-```
-
-See the [sesh repo](https://github.com/nathangathright/sesh) for full usage details.
-
-Common commands:
-
-```bash
-sesh new                  # Interactive session wizard
-sesh myproject ~/code     # Create/attach session
-sesh -s work -p ~/app     # Same using flags
-```
-
-### 4. Keychain Unlock
-
-macOS locks the login keychain over SSH, which blocks git credential helpers, code signing, and other tools. Add this function to your shell config:
-
-```bash
-cat >> ~/.zshrc << 'EOF'
-unlock() {
-  if security show-keychain-info ~/Library/Keychains/login.keychain-db 2>/dev/null; then
-    echo "🔓 Keychain is already unlocked"
-  else
-    security unlock-keychain ~/Library/Keychains/login.keychain-db
-  fi
-}
-EOF
-source ~/.zshrc
-```
-
-Run `unlock` after connecting to enter your password and restore keychain access.
-
-### 5. iPad
-
-Install Tailscale (same account) and Termius. Create a host using your Mac's Tailscale hostname and username.
+1. Set up your remote device and input devices.
+2. Open a browser and go to `http://<tailscale-hostname>:3773`.
+3. Start or resume Claude and Codex sessions in the t3code web UI.
+4. Close the browser when you leave. Your sessions keep running on your computer.
 
 ## Previewing Web Projects
 
-Since your iPad and Mac are on the same Tailscale network, any dev server running on your Mac is already accessible from your iPad. The setup script installs the [tailserve](https://github.com/nathangathright/tailserve) skill that teaches AI coding agents the correct commands for every framework (Vite, Next.js, Wrangler, etc.). Just ask your coding agent to "preview this project over Tailscale" and it will know what to do.
+Since your remote device and computer are on the same Tailscale network, any dev server running on your computer is already accessible from your remote device. For direct access, bind your dev server to `0.0.0.0` instead of `localhost`, then open `http://<hostname>:<port>` in your browser.
+
+The setup script installs the [tailserve](https://github.com/nathangathright/tailserve) skill that teaches AI coding agents the correct commands for every framework (Vite, Next.js, Wrangler, etc.). Just ask your coding agent to "preview this project over Tailscale" and it will know what to do.
 
 tailserve covers three approaches:
 - **Direct tailnet access** — bind to `0.0.0.0`, access via `http://<hostname>:<port>`
 - **`tailscale serve`** — automatic HTTPS, path-based routing for multiple projects
-- **`tailscale funnel`** — public sharing via the internet
 
 ## Uninstalling
 
 ```bash
-brew uninstall tailscale tmux qrencode
-rm ~/.tmux.conf
-rm ~/.claude/skills/tailserve
-rm ~/.agents/skills/tailserve
-rm -rf ~/Developer/tailserve
-# Remove the sesh function and unlock function from ~/.zshrc
+launchctl bootout gui/$(id -u)/com.t3code.server
+rm ~/Library/LaunchAgents/com.t3code.server.plist
+npm uninstall -g t3
+brew uninstall tailscale
+npx skills remove --global --agent '*' tailserve -y
 ```
 
 ## License
