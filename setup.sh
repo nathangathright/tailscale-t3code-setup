@@ -5,9 +5,17 @@
 set -e  # Exit on error
 
 T3_REQUIRED_NODE_RANGE="^22.16 || ^23.11 || >=24.10"
-T3_PORT="3773"
+T3_PORT_DEFAULT="3773"
+T3_PORT="${T3_PORT:-$T3_PORT_DEFAULT}"
 TAILSCALE_APP_PATH="/Applications/Tailscale.app"
 TAILSCALE_APP_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+T3_BASE_DIR="$HOME/.t3"
+T3_USERDATA_DIR="$T3_BASE_DIR/userdata"
+T3_LOG_DIR="$T3_USERDATA_DIR/logs"
+T3_WRAPPER_PATH="$T3_BASE_DIR/run-t3code.sh"
+T3_MACOS_LABEL="com.t3code.server"
+T3_LINUX_SERVICE_NAME="t3code-$(id -un).service"
+SERVICE_PATH=""
 
 echo "🚀 Setting up computer for remote coding from another device..."
 echo ""
@@ -89,6 +97,10 @@ tailscale_exec() {
     fi
 }
 
+get_tailscale_ipv4() {
+    tailscale_exec ip -4 2>/dev/null | awk 'NF {print; exit}'
+}
+
 start_tailscale_daemon() {
     case "$OS_FAMILY" in
         macos)
@@ -158,7 +170,71 @@ process.exit(supported ? 0 : 1);
 NODE
 }
 
+validate_t3_port() {
+    if ! [[ "$T3_PORT" =~ ^[0-9]+$ ]] || [ "$T3_PORT" -lt 1 ] || [ "$T3_PORT" -gt 65535 ]; then
+        echo "❌ Error: T3_PORT must be an integer between 1 and 65535."
+        exit 1
+    fi
+}
+
+port_available_on_host() {
+    local host="$1"
+    local port="$2"
+
+    T3_BIND_HOST="$host" T3_BIND_PORT="$port" node <<'NODE'
+const net = require("net");
+
+const host = process.env.T3_BIND_HOST;
+const port = Number(process.env.T3_BIND_PORT);
+
+const server = net.createServer();
+server.once("error", () => process.exit(1));
+server.once("listening", () => {
+  server.close(() => process.exit(0));
+});
+server.listen({ host, port });
+NODE
+}
+
+ensure_t3_runtime_config() {
+    mkdir -p "$T3_USERDATA_DIR" "$T3_LOG_DIR"
+}
+
+build_service_path() {
+    echo "${PATH}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+}
+
+stop_managed_t3code_service() {
+    case "$OS_FAMILY" in
+        macos)
+            launchctl bootout "gui/$(id -u)/${T3_MACOS_LABEL}" 2>/dev/null || true
+            ;;
+        linux)
+            if command -v systemctl &> /dev/null; then
+                sudo systemctl stop "$T3_LINUX_SERVICE_NAME" 2>/dev/null || true
+            fi
+            ;;
+    esac
+}
+
+write_t3_wrapper() {
+    local tailscale_ip="$1"
+
+    cat > "$T3_WRAPPER_PATH" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+export HOME="$HOME"
+export PATH="$SERVICE_PATH"
+
+exec "$NODE_BIN" "$T3_BIN" --host "$tailscale_ip" --port "$T3_PORT" --no-browser
+EOF
+    chmod 700 "$T3_WRAPPER_PATH"
+}
+
 echo "✓ Detected platform: ${OS_FAMILY}"
+
+validate_t3_port
 
 install_tailscale
 
@@ -203,6 +279,14 @@ TAILSCALE_HOST=$(tailscale_exec status --self=true | awk 'NR==1 {print $2}')
 if [ -z "$TAILSCALE_HOST" ]; then
     TAILSCALE_HOST=$(hostname | sed 's/\.local$//' | tr '[:upper:]' '[:lower:]')
 fi
+
+TAILSCALE_IP="$(get_tailscale_ipv4)"
+if [ -z "$TAILSCALE_IP" ]; then
+    echo "❌ Error: Could not determine the machine's Tailscale IPv4 address."
+    echo "Make sure Tailscale is connected, then re-run this script."
+    exit 1
+fi
+echo "✓ Tailscale IPv4 detected: ${TAILSCALE_IP}"
 
 # Check if Node.js is installed
 echo ""
@@ -255,17 +339,33 @@ fi
 
 NODE_BIN="$(command -v node)"
 T3_BIN="$(command -v t3)"
-T3_LOG_DIR="$HOME/.t3/userdata/logs"
+SERVICE_PATH="$(build_service_path)"
+
+ensure_t3_runtime_config
+
+stop_managed_t3code_service
+
+if ! port_available_on_host "$TAILSCALE_IP" "$T3_PORT"; then
+    echo "❌ Error: Port ${T3_PORT} is not available on ${TAILSCALE_IP}."
+    if [ "$T3_PORT" = "$T3_PORT_DEFAULT" ]; then
+        echo "Free that port or re-run with a different port, for example:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/nathangathright/tailscale-t3code-setup/main/setup.sh | T3_PORT=4000 bash"
+    else
+        echo "Choose a different T3_PORT, then re-run this script."
+    fi
+    exit 1
+fi
+
+write_t3_wrapper "$TAILSCALE_IP"
 
 install_t3code_service() {
     echo ""
     echo "🔄 Setting up t3code to start automatically..."
-    mkdir -p "$T3_LOG_DIR"
 
     case "$OS_FAMILY" in
         macos)
             local plist_label plist_path
-            plist_label="com.t3code.server"
+            plist_label="$T3_MACOS_LABEL"
             plist_path="$HOME/Library/LaunchAgents/${plist_label}.plist"
 
             mkdir -p "$HOME/Library/LaunchAgents"
@@ -278,9 +378,7 @@ install_t3code_service() {
     <string>${plist_label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${NODE_BIN}</string>
-        <string>${T3_BIN}</string>
-        <string>--no-browser</string>
+        <string>${T3_WRAPPER_PATH}</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${HOME}</string>
@@ -295,7 +393,7 @@ install_t3code_service() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>$(dirname "${NODE_BIN}"):$(dirname "${T3_BIN}"):/usr/local/bin:/usr/bin:/bin</string>
+        <string>${SERVICE_PATH}</string>
     </dict>
 </dict>
 </plist>
@@ -306,7 +404,7 @@ PLIST
             ;;
         linux)
             local service_name service_path
-            service_name="t3code-$(id -un).service"
+            service_name="$T3_LINUX_SERVICE_NAME"
             service_path="/etc/systemd/system/${service_name}"
 
             sudo tee "$service_path" > /dev/null <<SERVICE
@@ -320,8 +418,8 @@ Type=simple
 User=$(id -un)
 WorkingDirectory=${HOME}
 Environment=HOME=${HOME}
-Environment=PATH=$(dirname "${NODE_BIN}"):$(dirname "${T3_BIN}"):/usr/local/bin:/usr/bin:/bin
-ExecStart=${NODE_BIN} ${T3_BIN} --no-browser
+Environment=PATH=${SERVICE_PATH}
+ExecStart=${T3_WRAPPER_PATH}
 Restart=always
 RestartSec=5
 
@@ -352,7 +450,7 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "t3code is running at:"
 echo ""
-echo "  Local:  http://localhost:${T3_PORT}"
+echo "  Bind:   http://${TAILSCALE_IP}:${T3_PORT}"
 echo "  Remote: http://${TAILSCALE_HOST}:${T3_PORT}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
