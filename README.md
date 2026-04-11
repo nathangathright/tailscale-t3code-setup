@@ -24,13 +24,19 @@ By default, the script uses port `3773`. To use a different port:
 curl -fsSL https://raw.githubusercontent.com/nathangathright/tailscale-t3code-setup/main/setup.sh | T3_PORT=4000 bash
 ```
 
-On macOS, the script opens the Tailscale download page and waits for you to finish the app install and sign-in flow. On Linux, it installs Tailscale automatically. On both platforms, it installs `t3code`, sets up the background service, and prints the URL to open from your remote device.
+On macOS, the script opens the Tailscale download page and waits for you to finish the app install and sign-in flow. On Linux, it installs Tailscale automatically. On both platforms, it updates `t3code` to the latest npm release, sets up the background service, and prints the current pairing URL for your remote device when it can read it from the service logs.
 
-On your remote device, install Tailscale, sign in to the same tailnet, then open `http://<tailscale-hostname>:3773` in a browser to start coding.
+On your remote device, install Tailscale, sign in to the same tailnet, then open the pairing URL printed by the script. It will look like `http://<tailscale-hostname>:3773/pair#token=...`. If the script cannot read the pairing URL automatically, open `http://<tailscale-hostname>:3773` and use the pairing URL shown in the service logs.
 
 ## Staying Up to Date
 
-`t3code` is moving quickly. The safest update routine is:
+`t3code` is moving quickly. Re-running the setup script is the safest update routine because it refreshes both the script behavior and the installed `t3` CLI:
+
+```bash
+./setup.sh
+```
+
+If you used the one-line install from the README, re-run that same command. If you want to update the CLI first and then refresh the service definition:
 
 ```bash
 npm install -g t3@latest
@@ -45,7 +51,7 @@ npm outdated -g t3
 npx skills check
 ```
 
-Re-running `setup.sh` matters because it refreshes the wrapper script, service definition, bind host, and PATH used by the background service.
+Re-running `setup.sh` matters because it refreshes the wrapper script, service definition, pairing flow, bind host, and PATH used by the background service.
 
 ## Previewing Web Projects
 

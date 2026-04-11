@@ -16,6 +16,7 @@ T3_WRAPPER_PATH="$T3_BASE_DIR/run-t3code.sh"
 T3_MACOS_LABEL="com.t3code.server"
 T3_LINUX_SERVICE_NAME="t3code-$(id -un).service"
 SERVICE_PATH=""
+PAIR_URL=""
 
 echo "🚀 Setting up computer for remote coding from another device..."
 echo ""
@@ -227,9 +228,43 @@ set -euo pipefail
 export HOME="$HOME"
 export PATH="$SERVICE_PATH"
 
-exec "$NODE_BIN" "$T3_BIN" --host "$tailscale_ip" --port "$T3_PORT" --no-browser
+exec "$NODE_BIN" "$T3_BIN" serve --base-dir "$T3_BASE_DIR" --host "$tailscale_ip" --port "$T3_PORT"
 EOF
     chmod 700 "$T3_WRAPPER_PATH"
+}
+
+capture_t3_pairing_link() {
+    local output=""
+    local attempt=""
+    local raw_pair_url=""
+
+    for attempt in $(seq 1 20); do
+        case "$OS_FAMILY" in
+            macos)
+                if [ -f "${T3_LOG_DIR}/launchd-stdout.log" ]; then
+                    output="$(tail -n 200 "${T3_LOG_DIR}/launchd-stdout.log" 2>/dev/null || true)"
+                fi
+                ;;
+            linux)
+                output="$(sudo journalctl -u "$T3_LINUX_SERVICE_NAME" -n 200 --no-pager -o cat 2>/dev/null || true)"
+                ;;
+        esac
+
+        raw_pair_url="$(printf '%s\n' "$output" | grep -Eo 'https?://[^[:space:]]+/pair#token=[^[:space:]]+' | tail -n 1 || true)"
+        if [ -n "$raw_pair_url" ]; then
+            PAIR_URL="$(PAIR_URL="$raw_pair_url" T3_DISPLAY_HOST="$TAILSCALE_HOST" T3_DISPLAY_PORT="$T3_PORT" node -e '
+const url = new URL(process.env.PAIR_URL);
+url.hostname = process.env.T3_DISPLAY_HOST;
+url.port = process.env.T3_DISPLAY_PORT;
+process.stdout.write(url.toString());
+')"
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    return 1
 }
 
 echo "✓ Detected platform: ${OS_FAMILY}"
@@ -329,13 +364,9 @@ echo "✓ Supported coding-agent CLI detected for: ${AGENT_TARGETS[*]}"
 
 # Install t3code (web GUI for coding agents)
 echo ""
-echo "Installing t3code..."
-if ! command -v t3 &> /dev/null; then
-    npm install -g t3
-    echo "✓ t3code installed"
-else
-    echo "✓ t3code already installed"
-fi
+echo "Installing latest t3code..."
+npm install -g t3@latest
+echo "✓ t3code is up to date"
 
 NODE_BIN="$(command -v node)"
 T3_BIN="$(command -v t3)"
@@ -437,6 +468,8 @@ SERVICE
 
 install_t3code_service
 
+capture_t3_pairing_link || true
+
 # Install tailserve skill for detected coding agents
 echo ""
 echo "📚 Installing tailserve skill for detected coding agents..."
@@ -452,10 +485,17 @@ echo "t3code is running at:"
 echo ""
 echo "  Bind:   http://${TAILSCALE_IP}:${T3_PORT}"
 echo "  Remote: http://${TAILSCALE_HOST}:${T3_PORT}"
+if [ -n "$PAIR_URL" ]; then
+    echo "  Pair:   ${PAIR_URL}"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Next steps:"
 echo "1. On your remote device, install Tailscale and sign in with the same account"
-echo "2. Open a browser and go to: http://${TAILSCALE_HOST}:${T3_PORT}"
+if [ -n "$PAIR_URL" ]; then
+    echo "2. Open a browser and go to the pairing URL above"
+else
+    echo "2. Open http://${TAILSCALE_HOST}:${T3_PORT} and use the Pairing URL from the service logs if prompted"
+fi
 echo ""
 echo "Happy remote coding!"
